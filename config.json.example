@@ -1,0 +1,14 @@
+{
+  "jwt_token": "YOUR_JWT_TOKEN_HERE",
+  "printers": [
+    {
+      "name": "My Printer",
+      "uuid": "your-printer-uuid-here"
+    }
+  ],
+  "output": {
+    "directory": "output",
+    "save_json": true,
+    "save_csv": true
+  }
+}
