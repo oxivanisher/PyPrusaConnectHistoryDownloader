@@ -186,20 +186,57 @@ def load_existing_jobs(filepath):
 
 
 def merge_jobs(existing_jobs, new_jobs):
-    """Merge new jobs with existing jobs, avoiding duplicates based on job ID."""
+    """
+    Merge new jobs with existing jobs, avoiding duplicates based on job ID.
+
+    Optimization: Finished jobs that already exist in the archive are not updated,
+    since their data won't change. Only new jobs or in-progress jobs are updated.
+    """
     # Create a dictionary of existing jobs by ID for fast lookup
     existing_by_id = {job["id"]: job for job in existing_jobs if "id" in job}
 
-    # Update with new jobs (newer data overwrites older data for same ID)
+    # States that indicate a job is finished and won't change
+    FINISHED_STATES = {"FIN_OK", "FIN_STOPPED", "FIN_FAILED", "FIN_ERROR"}
+
+    stats = {
+        "new_jobs": 0,
+        "updated_jobs": 0,
+        "skipped_finished": 0
+    }
+
+    # Update with new jobs (but skip updating finished jobs that already exist)
     for job in new_jobs:
-        if "id" in job:
-            existing_by_id[job["id"]] = job
+        job_id = job.get("id")
+        if not job_id:
+            continue
+
+        # Check if this job already exists
+        if job_id in existing_by_id:
+            existing_job = existing_by_id[job_id]
+            existing_state = existing_job.get("state", "")
+            new_state = job.get("state", "")
+
+            # If the existing job is finished, keep the archived version
+            # (finished jobs don't change, and archive might have more complete data)
+            if existing_state in FINISHED_STATES:
+                stats["skipped_finished"] += 1
+                continue  # Keep existing job, don't update
+
+            # If job is in progress or state changed, update it
+            stats["updated_jobs"] += 1
+
+        else:
+            # New job not in archive
+            stats["new_jobs"] += 1
+
+        # Add or update the job
+        existing_by_id[job_id] = job
 
     # Convert back to list and sort by start time (newest first)
     merged = list(existing_by_id.values())
     merged.sort(key=lambda x: x.get("start", 0), reverse=True)
 
-    return merged
+    return merged, stats
 
 
 def save_json(jobs, filepath):
@@ -549,13 +586,16 @@ def main():
             print(f"  Downloaded {len(new_jobs)} jobs from API (last 3 months)")
 
             # Merge existing and new jobs
-            all_jobs = merge_jobs(existing_jobs, new_jobs)
+            all_jobs, merge_stats = merge_jobs(existing_jobs, new_jobs)
 
-            # Calculate what's new
-            new_job_count = len(all_jobs) - len(existing_jobs)
-            if new_job_count > 0:
-                print(f"  Added {new_job_count} new jobs to archive")
-            else:
+            # Display merge statistics
+            if merge_stats["new_jobs"] > 0:
+                print(f"  Added {merge_stats['new_jobs']} new jobs to archive")
+            if merge_stats["updated_jobs"] > 0:
+                print(f"  Updated {merge_stats['updated_jobs']} in-progress jobs")
+            if merge_stats["skipped_finished"] > 0:
+                print(f"  Skipped {merge_stats['skipped_finished']} finished jobs (already in archive)")
+            if merge_stats["new_jobs"] == 0 and merge_stats["updated_jobs"] == 0:
                 print(f"  No new jobs (all jobs already in archive)")
 
             print(f"  Total jobs in archive: {len(all_jobs)}")
