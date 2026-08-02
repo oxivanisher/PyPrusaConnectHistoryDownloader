@@ -2,11 +2,21 @@ import requests
 import csv
 import json
 import os
+import re
 import base64
 import time
 from datetime import datetime
 from pathlib import Path
 from collections import defaultdict
+
+# Matches ANSI/CSI escape sequences (e.g. bracketed-paste markers like \x1b[201~)
+# as well as stray control characters that terminals sometimes inject when pasting.
+CONTROL_CHAR_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z~]|[\x00-\x1f\x7f]")
+
+
+def strip_control_characters(text):
+    """Remove ANSI escape sequences and other control characters from pasted input."""
+    return CONTROL_CHAR_RE.sub("", text)
 
 
 def load_config(config_path="config.json"):
@@ -42,7 +52,7 @@ def get_token_from_user():
     print("\n" + "-"*60)
 
     while True:
-        token = input("\nPaste your JWT token here: ").strip()
+        token = strip_control_characters(input("\nPaste your JWT token here: ")).strip()
 
         if not token:
             print("Error: Token cannot be empty. Please try again.")
@@ -110,7 +120,7 @@ def check_token_expiration(token):
     return False, f"Token valid until {exp_date}"
 
 
-def fetch_page(url, headers):
+def fetch_page(url, headers, config_path=None):
     """Fetch a single page from the API."""
     try:
         r = requests.get(url, headers=headers, timeout=30)
@@ -120,6 +130,8 @@ def fetch_page(url, headers):
         if e.response.status_code == 401:
             print(f"Error: Authentication failed. Your token may be expired or invalid.")
             print(f"Status code: {e.response.status_code}")
+            if config_path:
+                print(f"Update your token in: {Path(config_path).absolute()}")
         else:
             print(f"HTTP Error: {e}")
         raise
@@ -128,7 +140,7 @@ def fetch_page(url, headers):
         raise
 
 
-def fetch_all_jobs(printer_uuid, jwt_token):
+def fetch_all_jobs(printer_uuid, jwt_token, config_path=None):
     """Fetch all jobs for a specific printer."""
     base_url = f"https://connect.prusa3d.com/app/printers/{printer_uuid}/jobs"
     headers = {
@@ -146,7 +158,7 @@ def fetch_all_jobs(printer_uuid, jwt_token):
         url = f"{base_url}?offset={offset}"
         print(f"  Fetching page {page_count} (offset: {offset})...")
 
-        data = fetch_page(url, headers)
+        data = fetch_page(url, headers, config_path)
 
         # Get jobs from the response
         page_jobs = data.get("jobs", [])
@@ -499,7 +511,8 @@ def print_stats_summary(stats_by_year, printer_name):
 
 def main():
     """Main function to orchestrate the job history download."""
-    config = load_config()
+    config_path = "config.json"
+    config = load_config(config_path)
 
     # Check if token exists and is not empty
     jwt_token = config.get("jwt_token", "").strip()
@@ -514,7 +527,7 @@ def main():
 
         # Save token to config
         config["jwt_token"] = jwt_token
-        save_config(config)
+        save_config(config, config_path)
         print("\n✓ Token saved to config.json")
         print("")
 
@@ -535,7 +548,7 @@ def main():
 
             # Save new token to config
             config["jwt_token"] = jwt_token
-            save_config(config)
+            save_config(config, config_path)
             print("\n✓ Token updated in config.json")
 
             # Re-check new token
@@ -564,6 +577,7 @@ def main():
         return
 
     all_stats = {}
+    failed_printers = []
 
     for printer in printers:
         printer_name = printer["name"]
@@ -582,7 +596,7 @@ def main():
                 print(f"  Found {len(existing_jobs)} existing jobs in archive")
 
             # Fetch new jobs from API
-            new_jobs = fetch_all_jobs(printer_uuid, jwt_token)
+            new_jobs = fetch_all_jobs(printer_uuid, jwt_token, config_path)
             print(f"  Downloaded {len(new_jobs)} jobs from API (last 3 months)")
 
             # Merge existing and new jobs
@@ -642,10 +656,16 @@ def main():
 
         except Exception as e:
             print(f"  Error processing {printer_name}: {e}")
+            failed_printers.append(printer_name)
             continue
 
     print(f"\n{'='*60}")
-    print("Download completed!")
+    if failed_printers:
+        print("Download completed WITH ERRORS!")
+        print(f"Failed printers: {', '.join(failed_printers)}")
+        print("See error messages above for details.")
+    else:
+        print("Download completed!")
     print(f"Output saved to: {output_dir.absolute()}")
     print(f"{'='*60}\n")
 
