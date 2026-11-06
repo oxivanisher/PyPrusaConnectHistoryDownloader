@@ -292,3 +292,7 @@ Simply add more entries to the `printers` array in `config.json`:
 ```
 
 Each printer will be processed sequentially and get its own set of output files.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
